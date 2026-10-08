@@ -225,7 +225,7 @@ nodes:
      no shutdown
     !
     interface GigabitEthernet0/1
-     description To R6 - Area 3 NSSA
+     description To  - Area 3 NSSA
      ip address 10.3.56.1 255.255.255.252
      ip ospf network point-to-point
      no shutdown
@@ -253,7 +253,7 @@ nodes:
     label: GigabitEthernet0/1
     type: physical
 - id: n5
-  label: R6
+  label: 
   node_definition: iosv
   x: -440
   y: 200
@@ -301,6 +301,7 @@ nodes:
      network 10.3.56.2 0.0.0.0 area 3
      passive-interface Loopback0
      passive-interface Loopback10
+     shutdown
     !
     route-map RM-LO20 permit 10
      match interface Loopback20
