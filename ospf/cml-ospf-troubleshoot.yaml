@@ -1,0 +1,445 @@
+lab:
+  title: OSPF Troubleshooting - CCNP (9 faults)
+  description: 'Multi-area OSPF troubleshooting lab: stub, NSSA, virtual link, MD5 auth, redistribution.'
+  notes: |
+    # OSPF Troubleshooting (CCNP) - 9 faults injected
+
+    Start all nodes and wait ~3-5 minutes for IOSv to finish booting.
+    Console into any router; no credentials are required.
+
+    Design intent: single OSPF process 1 across all routers:
+    Area 0 (R1/R2/R3 via SW1, MD5 auth), Area 1 totally stubby (R1/R4),
+    Area 2 transit (R2/R5), Area 3 NSSA (R5/R6) joined to the backbone by a
+    virtual link R2<->R5, and R3 as the Internet-edge ASBR (default route).
+
+    Goal: every router can ping 8.8.8.8 (source from a 172.16.x.1 loopback or a
+    10.x interface), and every 172.16.x.0/24 and 172.31.6.0/24 is reachable
+    from everywhere it should be. See the lab guide for tickets.
+  version: 0.2.0
+nodes:
+- id: n0
+  label: R4
+  node_definition: iosv
+  x: -200
+  y: -200
+  tags: []
+  configuration: |
+    hostname R4
+    no ip domain lookup
+    service timestamps debug datetime msec
+    service timestamps log datetime msec
+    logging buffered 32768
+    !
+    line con 0
+     exec-timeout 0 0
+     logging synchronous
+    !
+    interface Loopback0
+     ip address 4.4.4.4 255.255.255.255
+     no shutdown
+    !
+    interface Loopback10
+     description Simulated user LAN
+     ip address 172.16.4.1 255.255.255.0
+     ip ospf network point-to-point
+     no shutdown
+    !
+    interface GigabitEthernet0/0
+     description To R1 - Area 1
+     ip address 10.1.14.2 255.255.255.252
+     ip ospf network point-to-point
+     no shutdown
+    !
+    router ospf 1
+     router-id 4.4.4.4
+     auto-cost reference-bandwidth 10000
+     network 4.4.4.4 0.0.0.0 area 1
+     network 172.16.4.1 0.0.0.0 area 1
+     network 10.1.14.2 0.0.0.0 area 1
+     passive-interface Loopback0
+     passive-interface Loopback10
+    !
+    end
+  interfaces:
+  - id: i0
+    slot: 0
+    label: GigabitEthernet0/0
+    type: physical
+- id: n1
+  label: R1
+  node_definition: iosv
+  x: 40
+  y: -200
+  tags: []
+  configuration: |
+    hostname R1
+    no ip domain lookup
+    service timestamps debug datetime msec
+    service timestamps log datetime msec
+    logging buffered 32768
+    !
+    line con 0
+     exec-timeout 0 0
+     logging synchronous
+    !
+    interface Loopback0
+     ip address 1.1.1.1 255.255.255.255
+     no shutdown
+    !
+    interface GigabitEthernet0/0
+     description Area 0 segment via SW1
+     ip address 10.0.0.1 255.255.255.0
+     ip ospf authentication message-digest
+     ip ospf message-digest-key 1 md5 CCNP-LAB
+     no shutdown
+    !
+    interface GigabitEthernet0/1
+     description To R4 - Area 1
+     ip address 10.1.14.1 255.255.255.252
+     ip ospf network point-to-point
+     no shutdown
+    !
+    router ospf 1
+     router-id 1.1.1.1
+     auto-cost reference-bandwidth 10000
+     area 1 stub no-summary
+     network 1.1.1.1 0.0.0.0 area 0
+     network 10.0.0.1 0.0.0.0 area 0
+     network 10.1.14.1 0.0.0.0 area 1
+     passive-interface Loopback0
+    !
+    end
+  interfaces:
+  - id: i0
+    slot: 0
+    label: GigabitEthernet0/0
+    type: physical
+  - id: i1
+    slot: 1
+    label: GigabitEthernet0/1
+    type: physical
+- id: n2
+  label: SW1
+  node_definition: unmanaged_switch
+  x: 280
+  y: 0
+  tags: []
+  interfaces:
+  - id: i0
+    slot: 0
+    label: port0
+    type: physical
+  - id: i1
+    slot: 1
+    label: port1
+    type: physical
+  - id: i2
+    slot: 2
+    label: port2
+    type: physical
+- id: n3
+  label: R2
+  node_definition: iosv
+  x: 40
+  y: 200
+  tags: []
+  configuration: |
+    hostname R2
+    no ip domain lookup
+    service timestamps debug datetime msec
+    service timestamps log datetime msec
+    logging buffered 32768
+    !
+    line con 0
+     exec-timeout 0 0
+     logging synchronous
+    !
+    interface Loopback0
+     ip address 2.2.2.2 255.255.255.255
+     no shutdown
+    !
+    interface GigabitEthernet0/0
+     description Area 0 segment via SW1
+     ip address 10.0.0.2 255.255.255.0
+     ip ospf authentication message-digest
+     ip ospf message-digest-key 1 md5 CCNP-LAB
+     no shutdown
+    !
+    interface GigabitEthernet0/1
+     description To R5 - Area 2
+     ip address 10.2.25.1 255.255.255.252
+     ip ospf network point-to-point
+     no shutdown
+    !
+    router ospf 1
+     router-id 2.2.2.2
+     auto-cost reference-bandwidth 10000
+     area 2 virtual-link 6.6.6.6
+     network 2.2.2.2 0.0.0.0 area 0
+     network 10.0.0.2 0.0.0.0 area 0
+     network 10.2.25.1 0.0.0.0 area 2
+     passive-interface Loopback0
+    !
+    end
+  interfaces:
+  - id: i0
+    slot: 0
+    label: GigabitEthernet0/0
+    type: physical
+  - id: i1
+    slot: 1
+    label: GigabitEthernet0/1
+    type: physical
+- id: n4
+  label: R5
+  node_definition: iosv
+  x: -200
+  y: 200
+  tags: []
+  configuration: |
+    hostname R5
+    no ip domain lookup
+    service timestamps debug datetime msec
+    service timestamps log datetime msec
+    logging buffered 32768
+    !
+    line con 0
+     exec-timeout 0 0
+     logging synchronous
+    !
+    interface Loopback0
+     ip address 5.5.5.5 255.255.255.255
+     no shutdown
+    !
+    interface Loopback10
+     description Simulated user LAN
+     ip address 172.16.5.1 255.255.255.0
+     ip ospf network point-to-point
+     no shutdown
+    !
+    interface GigabitEthernet0/0
+     description To R2 - Area 2
+     ip address 10.2.25.2 255.255.255.252
+     ip ospf network point-to-point
+     ip ospf dead-interval 30
+     no shutdown
+    !
+    interface GigabitEthernet0/1
+     description To R6 - Area 3 NSSA
+     ip address 10.3.56.1 255.255.255.252
+     ip ospf network point-to-point
+     no shutdown
+    !
+    router ospf 1
+     router-id 5.5.5.5
+     auto-cost reference-bandwidth 10000
+     area 2 virtual-link 2.2.2.2
+     area 3 nssa
+     network 5.5.5.5 0.0.0.0 area 2
+     network 172.16.5.1 0.0.0.0 area 2
+     network 10.2.25.2 0.0.0.0 area 2
+     network 10.3.56.1 0.0.0.0 area 3
+     passive-interface Loopback0
+     passive-interface Loopback10
+    !
+    end
+  interfaces:
+  - id: i0
+    slot: 0
+    label: GigabitEthernet0/0
+    type: physical
+  - id: i1
+    slot: 1
+    label: GigabitEthernet0/1
+    type: physical
+- id: n5
+  label: R6
+  node_definition: iosv
+  x: -440
+  y: 200
+  tags: []
+  configuration: |
+    hostname R6
+    no ip domain lookup
+    service timestamps debug datetime msec
+    service timestamps log datetime msec
+    logging buffered 32768
+    !
+    line con 0
+     exec-timeout 0 0
+     logging synchronous
+    !
+    interface Loopback0
+     ip address 6.6.6.6 255.255.255.255
+     no shutdown
+    !
+    interface Loopback10
+     description Simulated user LAN
+     ip address 172.16.6.1 255.255.255.0
+     ip ospf network point-to-point
+     no shutdown
+    !
+    interface Loopback20
+     description Simulated external (redistributed) network
+     ip address 172.31.6.1 255.255.255.0
+     no shutdown
+    !
+    interface GigabitEthernet0/0
+     description To R5 - Area 3 NSSA
+     ip address 10.3.56.2 255.255.255.252
+     ip ospf network point-to-point
+     ip mtu 1400
+     no shutdown
+    !
+    router ospf 1
+     router-id 6.6.6.6
+     auto-cost reference-bandwidth 10000
+     area 3 nssa
+     redistribute connected route-map RM-LO20
+     network 6.6.6.6 0.0.0.0 area 3
+     network 172.16.6.0 0.0.0.0 area 3
+     network 10.3.56.2 0.0.0.0 area 3
+     passive-interface Loopback0
+     passive-interface Loopback10
+    !
+    route-map RM-LO20 permit 10
+     match interface Loopback20
+    !
+    end
+  interfaces:
+  - id: i0
+    slot: 0
+    label: GigabitEthernet0/0
+    type: physical
+- id: n6
+  label: R3
+  node_definition: iosv
+  x: 520
+  y: 0
+  tags: []
+  configuration: |
+    hostname R3
+    no ip domain lookup
+    service timestamps debug datetime msec
+    service timestamps log datetime msec
+    logging buffered 32768
+    !
+    line con 0
+     exec-timeout 0 0
+     logging synchronous
+    !
+    interface Loopback0
+     ip address 3.3.3.3 255.255.255.255
+     no shutdown
+    !
+    interface GigabitEthernet0/0
+     description Area 0 segment via SW1
+     ip address 10.0.0.3 255.255.255.0
+     ip ospf authentication message-digest
+     ip ospf message-digest-key 1 md5 ccnp-lab
+     ip ospf priority 0
+     no shutdown
+    !
+    interface GigabitEthernet0/1
+     description To ISP (not in OSPF)
+     ip address 198.51.100.1 255.255.255.252
+     no shutdown
+    !
+    ip route 0.0.0.0 0.0.0.0 198.51.100.2
+    !
+    router ospf 1
+     router-id 3.3.3.3
+     auto-cost reference-bandwidth 10000
+     network 3.3.3.3 0.0.0.0 area 0
+     network 10.0.0.3 0.0.0.0 area 0
+     passive-interface Loopback0
+    !
+    end
+  interfaces:
+  - id: i0
+    slot: 0
+    label: GigabitEthernet0/0
+    type: physical
+  - id: i1
+    slot: 1
+    label: GigabitEthernet0/1
+    type: physical
+- id: n7
+  label: ISP
+  node_definition: iosv
+  x: 760
+  y: 0
+  tags: []
+  configuration: |
+    hostname ISP
+    no ip domain lookup
+    service timestamps debug datetime msec
+    service timestamps log datetime msec
+    logging buffered 32768
+    !
+    line con 0
+     exec-timeout 0 0
+     logging synchronous
+    !
+    interface Loopback0
+     description Simulated Internet host
+     ip address 8.8.8.8 255.255.255.255
+     no shutdown
+    !
+    interface GigabitEthernet0/0
+     description To R3
+     ip address 198.51.100.2 255.255.255.252
+     no shutdown
+    !
+    ip route 10.0.0.0 255.0.0.0 198.51.100.1
+    ip route 172.16.0.0 255.240.0.0 198.51.100.1
+    !
+    end
+  interfaces:
+  - id: i0
+    slot: 0
+    label: GigabitEthernet0/0
+    type: physical
+links:
+- id: l0
+  i1: i0
+  n1: n1
+  i2: i0
+  n2: n2
+  label: R1-GigabitEthernet0/0<->SW1-port0
+- id: l1
+  i1: i0
+  n1: n3
+  i2: i1
+  n2: n2
+  label: R2-GigabitEthernet0/0<->SW1-port1
+- id: l2
+  i1: i0
+  n1: n6
+  i2: i2
+  n2: n2
+  label: R3-GigabitEthernet0/0<->SW1-port2
+- id: l3
+  i1: i1
+  n1: n1
+  i2: i0
+  n2: n0
+  label: R1-GigabitEthernet0/1<->R4-GigabitEthernet0/0
+- id: l4
+  i1: i1
+  n1: n3
+  i2: i0
+  n2: n4
+  label: R2-GigabitEthernet0/1<->R5-GigabitEthernet0/0
+- id: l5
+  i1: i1
+  n1: n4
+  i2: i0
+  n2: n5
+  label: R5-GigabitEthernet0/1<->R6-GigabitEthernet0/0
+- id: l6
+  i1: i1
+  n1: n6
+  i2: i0
+  n2: n7
+  label: R3-GigabitEthernet0/1<->ISP-GigabitEthernet0/0
