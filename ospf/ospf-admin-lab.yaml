@@ -1,0 +1,784 @@
+lab:
+  title: OSPF Administration - Practice
+  description: 'OSPF administration practice: cost/bandwidth, summarization, route and LSA filtering, redistribution control, key-chain authentication.'
+  notes: |
+    # OSPF Administration Lab
+
+    Start state: addressing, basic OSPF (interface-level "ip ospf 1 area N") and RIPv2 already work.
+    Everything else is yours to configure. Requirements are also drawn on the topology canvas.
+
+    Areas: 0 = R1 R2 R3 R4 ring | 1 = R2(ABR) R5 R8 | 2 = R4(ABR) R6 | RIPv2 = R3(ASBR) - R7
+
+    ## 1  HYGIENE
+    1.1 passive-interface default on every OSPF router; un-passive only the routed OSPF links (R3-R7 is RIP, not OSPF)
+    1.2 All routed OSPF links = point-to-point (no DR/BDR), both ends
+    1.3 Area 2 totally stubby (ABR R4, internal router R6)
+
+    ## 2  PATH MANIPULATION
+    2.1 Reference bandwidth 10000 (Mbps) on all OSPF routers
+    2.2 R2-R5 is a 100 Mbps circuit, R5-R8 a 10 Mbps circuit. Use the `bandwidth` command (NOT ip ospf cost) so the OSPF costs become 100 and 1000
+    2.3 R3-R4 is a backup link: cost 100 on both ends. R1 <-> R3 traffic must use R2 only; the ring must still fail over to R4 if R2-R3 goes down
+
+    ## 3  SUMMARIZATION
+    3.1 R2: advertise 172.16.48.0/22 into area 0 instead of the four /24s behind R5 (172.16.48.0 - 172.16.51.0)
+
+    ## 4  REDISTRIBUTION FILTERING (R3: RIP -> OSPF)
+    4.1 Only 192.168.10.0/24 and 192.168.20.0/24 may enter OSPF. 192.168.30.0/24 and 192.168.40.0/24 stay in RIP only
+    4.2 192.168.10.0/24: Type 1 (E1), seed metric 50, tag 110. 192.168.20.0/24: Type 2 (E2), seed metric 20, tag 120
+
+    ## 5  ROUTE FILTERING (routing table only, LSDB untouched)
+    5.1 R1: do not install 192.168.20.0/24 (prefix-list). The Type 5 LSA must remain in R1's database
+    5.2 R5: do not install external routes carrying tag 110 (route-map). All other routers still install them
+
+    ## 6  LSA FILTERING
+    6.1 R2: area 1 must not receive 172.16.60.0/24 (Type 3 LSA)
+    6.2 R4: do not advertise 172.16.63.0/24 from area 2 into area 0
+    6.3 R5: send NO LSAs to R8 (adjacency stays FULL). R8 reaches the rest of the network with a static default via R5
+
+    ## 7  AUTHENTICATION WITH KEY CHAINS (configure BOTH ends)
+    7.1 Area 0 links R1-R2, R2-R3, R3-R4, R4-R1: key chain KC-BACKBONE, key 1, HMAC-SHA-256, key-string BackboneKey256
+    7.2 Area 1 links R2-R5, R5-R8: key chain KC-AREA1, key 7, HMAC-SHA-256, key-string Area1Key256
+    7.3 Area 2 link R4-R6: key chain KC-AREA2, key 3, HMAC-SHA-256, key-string Area2Key256
+    7.4 RIPv2 R3-R7: MD5 authentication using key chain KC-RIP, key 1, key-string RipKey1 (R7 needs configuring too)
+
+    DONE WHEN: all neighbours are FULL, R6 pings 172.16.10.1 from Lo10, R8 pings 192.168.20.1 from Lo10, and every task verifies.
+
+    ## Addressing (lower-numbered router = .1, higher = .2 on every /30)
+    R1-R2 10.0.12.0 | R2-R3 10.0.23.0 | R3-R4 10.0.34.0 | R4-R1 10.0.14.0
+    R2-R5 10.1.25.0 | R5-R8 10.1.58.0 | R4-R6 10.2.46.0 | R3-R7 10.9.37.0
+    Router IDs / Lo0: Rn = n.n.n.n
+    R1 Lo10 172.16.10.1/24 | R5 Lo10-13 172.16.48-51.1/24 | R6 Lo10-13 172.16.60-63.1/24
+    R7 Lo10-13 192.168.10/20/30/40.1/24 | R8 Lo10 172.16.80.1/24
+  version: 0.2.0
+nodes:
+  - id: n0
+    label: R8
+    node_definition: iosv
+    x: -640
+    y: 0
+    tags: []
+    configuration: |
+      hostname R8
+      no ip domain lookup
+      service timestamps debug datetime msec
+      service timestamps log datetime msec
+      logging buffered 32768
+      !
+      line con 0
+       exec-timeout 0 0
+       logging synchronous
+      !
+      interface Loopback0
+       ip address 8.8.8.8 255.255.255.255
+       ip ospf 1 area 1
+       no shutdown
+      !
+      interface Loopback10
+       description Simulated LAN
+       ip address 172.16.80.1 255.255.255.0
+       ip ospf 1 area 1
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface GigabitEthernet0/0
+       description To R5 (area 1)
+       ip address 10.1.58.2 255.255.255.252
+       ip ospf 1 area 1
+       no shutdown
+      !
+      router ospf 1
+       router-id 8.8.8.8
+      !
+      end
+    interfaces:
+      - id: i0
+        slot: 0
+        label: GigabitEthernet0/0
+        type: physical
+  - id: n1
+    label: R5
+    node_definition: iosv
+    x: -320
+    y: 0
+    tags: []
+    configuration: |
+      hostname R5
+      no ip domain lookup
+      service timestamps debug datetime msec
+      service timestamps log datetime msec
+      logging buffered 32768
+      !
+      line con 0
+       exec-timeout 0 0
+       logging synchronous
+      !
+      interface Loopback0
+       ip address 5.5.5.5 255.255.255.255
+       ip ospf 1 area 1
+       no shutdown
+      !
+      interface Loopback10
+       description Simulated LAN
+       ip address 172.16.48.1 255.255.255.0
+       ip ospf 1 area 1
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface Loopback11
+       description Simulated LAN
+       ip address 172.16.49.1 255.255.255.0
+       ip ospf 1 area 1
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface Loopback12
+       description Simulated LAN
+       ip address 172.16.50.1 255.255.255.0
+       ip ospf 1 area 1
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface Loopback13
+       description Simulated LAN
+       ip address 172.16.51.1 255.255.255.0
+       ip ospf 1 area 1
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface GigabitEthernet0/0
+       description To R2 (area 1)
+       ip address 10.1.25.2 255.255.255.252
+       ip ospf 1 area 1
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description To R8 (area 1)
+       ip address 10.1.58.1 255.255.255.252
+       ip ospf 1 area 1
+       no shutdown
+      !
+      router ospf 1
+       router-id 5.5.5.5
+      !
+      end
+    interfaces:
+      - id: i0
+        slot: 0
+        label: GigabitEthernet0/0
+        type: physical
+      - id: i1
+        slot: 1
+        label: GigabitEthernet0/1
+        type: physical
+  - id: n2
+    label: R2
+    node_definition: iosv
+    x: 0
+    y: 0
+    tags: []
+    configuration: |
+      hostname R2
+      no ip domain lookup
+      service timestamps debug datetime msec
+      service timestamps log datetime msec
+      logging buffered 32768
+      !
+      line con 0
+       exec-timeout 0 0
+       logging synchronous
+      !
+      interface Loopback0
+       ip address 2.2.2.2 255.255.255.255
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/0
+       description To R1 (area 0)
+       ip address 10.0.12.2 255.255.255.252
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description To R3 (area 0)
+       ip address 10.0.23.1 255.255.255.252
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/2
+       description To R5 (area 1)
+       ip address 10.1.25.1 255.255.255.252
+       ip ospf 1 area 1
+       no shutdown
+      !
+      router ospf 1
+       router-id 2.2.2.2
+      !
+      end
+    interfaces:
+      - id: i0
+        slot: 0
+        label: GigabitEthernet0/0
+        type: physical
+      - id: i1
+        slot: 1
+        label: GigabitEthernet0/1
+        type: physical
+      - id: i2
+        slot: 2
+        label: GigabitEthernet0/2
+        type: physical
+  - id: n3
+    label: R3
+    node_definition: iosv
+    x: 320
+    y: 0
+    tags: []
+    configuration: |
+      hostname R3
+      no ip domain lookup
+      service timestamps debug datetime msec
+      service timestamps log datetime msec
+      logging buffered 32768
+      !
+      line con 0
+       exec-timeout 0 0
+       logging synchronous
+      !
+      interface Loopback0
+       ip address 3.3.3.3 255.255.255.255
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/0
+       description To R2 (area 0)
+       ip address 10.0.23.2 255.255.255.252
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description To R4 (area 0)
+       ip address 10.0.34.1 255.255.255.252
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/2
+       description To R7 (RIPv2, not in OSPF)
+       ip address 10.9.37.1 255.255.255.252
+       no shutdown
+      !
+      router ospf 1
+       router-id 3.3.3.3
+       redistribute rip subnets
+      !
+      router rip
+       version 2
+       no auto-summary
+       passive-interface default
+       no passive-interface GigabitEthernet0/2
+       network 10.0.0.0
+      !
+      end
+    interfaces:
+      - id: i0
+        slot: 0
+        label: GigabitEthernet0/0
+        type: physical
+      - id: i1
+        slot: 1
+        label: GigabitEthernet0/1
+        type: physical
+      - id: i2
+        slot: 2
+        label: GigabitEthernet0/2
+        type: physical
+  - id: n4
+    label: R7
+    node_definition: iosv
+    x: 640
+    y: 0
+    tags: []
+    configuration: |
+      hostname R7
+      no ip domain lookup
+      service timestamps debug datetime msec
+      service timestamps log datetime msec
+      logging buffered 32768
+      !
+      line con 0
+       exec-timeout 0 0
+       logging synchronous
+      !
+      interface Loopback0
+       ip address 7.7.7.7 255.255.255.255
+       no shutdown
+      !
+      interface Loopback10
+       description Simulated external LAN
+       ip address 192.168.10.1 255.255.255.0
+       no shutdown
+      !
+      interface Loopback11
+       description Simulated external LAN
+       ip address 192.168.20.1 255.255.255.0
+       no shutdown
+      !
+      interface Loopback12
+       description Simulated external LAN
+       ip address 192.168.30.1 255.255.255.0
+       no shutdown
+      !
+      interface Loopback13
+       description Simulated external LAN
+       ip address 192.168.40.1 255.255.255.0
+       no shutdown
+      !
+      interface GigabitEthernet0/0
+       description To R3 (RIPv2)
+       ip address 10.9.37.2 255.255.255.252
+       no shutdown
+      !
+      ip route 0.0.0.0 0.0.0.0 10.9.37.1
+      !
+      router rip
+       version 2
+       no auto-summary
+       passive-interface default
+       no passive-interface GigabitEthernet0/0
+       network 10.0.0.0
+       network 192.168.10.0
+       network 192.168.20.0
+       network 192.168.30.0
+       network 192.168.40.0
+      !
+      end
+    interfaces:
+      - id: i0
+        slot: 0
+        label: GigabitEthernet0/0
+        type: physical
+  - id: n5
+    label: R1
+    node_definition: iosv
+    x: 0
+    y: 240
+    tags: []
+    configuration: |
+      hostname R1
+      no ip domain lookup
+      service timestamps debug datetime msec
+      service timestamps log datetime msec
+      logging buffered 32768
+      !
+      line con 0
+       exec-timeout 0 0
+       logging synchronous
+      !
+      interface Loopback0
+       ip address 1.1.1.1 255.255.255.255
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface Loopback10
+       description Simulated LAN
+       ip address 172.16.10.1 255.255.255.0
+       ip ospf 1 area 0
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface GigabitEthernet0/0
+       description To R2 (area 0)
+       ip address 10.0.12.1 255.255.255.252
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description To R4 (area 0)
+       ip address 10.0.14.1 255.255.255.252
+       ip ospf 1 area 0
+       no shutdown
+      !
+      router ospf 1
+       router-id 1.1.1.1
+      !
+      end
+    interfaces:
+      - id: i0
+        slot: 0
+        label: GigabitEthernet0/0
+        type: physical
+      - id: i1
+        slot: 1
+        label: GigabitEthernet0/1
+        type: physical
+  - id: n6
+    label: R4
+    node_definition: iosv
+    x: 320
+    y: 240
+    tags: []
+    configuration: |
+      hostname R4
+      no ip domain lookup
+      service timestamps debug datetime msec
+      service timestamps log datetime msec
+      logging buffered 32768
+      !
+      line con 0
+       exec-timeout 0 0
+       logging synchronous
+      !
+      interface Loopback0
+       ip address 4.4.4.4 255.255.255.255
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/0
+       description To R3 (area 0)
+       ip address 10.0.34.2 255.255.255.252
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/1
+       description To R1 (area 0)
+       ip address 10.0.14.2 255.255.255.252
+       ip ospf 1 area 0
+       no shutdown
+      !
+      interface GigabitEthernet0/2
+       description To R6 (area 2)
+       ip address 10.2.46.1 255.255.255.252
+       ip ospf 1 area 2
+       no shutdown
+      !
+      router ospf 1
+       router-id 4.4.4.4
+      !
+      end
+    interfaces:
+      - id: i0
+        slot: 0
+        label: GigabitEthernet0/0
+        type: physical
+      - id: i1
+        slot: 1
+        label: GigabitEthernet0/1
+        type: physical
+      - id: i2
+        slot: 2
+        label: GigabitEthernet0/2
+        type: physical
+  - id: n7
+    label: R6
+    node_definition: iosv
+    x: 640
+    y: 240
+    tags: []
+    configuration: |
+      hostname R6
+      no ip domain lookup
+      service timestamps debug datetime msec
+      service timestamps log datetime msec
+      logging buffered 32768
+      !
+      line con 0
+       exec-timeout 0 0
+       logging synchronous
+      !
+      interface Loopback0
+       ip address 6.6.6.6 255.255.255.255
+       ip ospf 1 area 2
+       no shutdown
+      !
+      interface Loopback10
+       description Simulated LAN
+       ip address 172.16.60.1 255.255.255.0
+       ip ospf 1 area 2
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface Loopback11
+       description Simulated LAN
+       ip address 172.16.61.1 255.255.255.0
+       ip ospf 1 area 2
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface Loopback12
+       description Simulated LAN
+       ip address 172.16.62.1 255.255.255.0
+       ip ospf 1 area 2
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface Loopback13
+       description Simulated LAN
+       ip address 172.16.63.1 255.255.255.0
+       ip ospf 1 area 2
+       ip ospf network point-to-point
+       no shutdown
+      !
+      interface GigabitEthernet0/0
+       description To R4 (area 2)
+       ip address 10.2.46.2 255.255.255.252
+       ip ospf 1 area 2
+       no shutdown
+      !
+      router ospf 1
+       router-id 6.6.6.6
+      !
+      end
+    interfaces:
+      - id: i0
+        slot: 0
+        label: GigabitEthernet0/0
+        type: physical
+links:
+  - id: l0
+    i1: i0
+    n1: n5
+    i2: i0
+    n2: n2
+    label: R1-GigabitEthernet0/0<->R2-GigabitEthernet0/0
+  - id: l1
+    i1: i1
+    n1: n2
+    i2: i0
+    n2: n3
+    label: R2-GigabitEthernet0/1<->R3-GigabitEthernet0/0
+  - id: l2
+    i1: i1
+    n1: n3
+    i2: i0
+    n2: n6
+    label: R3-GigabitEthernet0/1<->R4-GigabitEthernet0/0
+  - id: l3
+    i1: i1
+    n1: n6
+    i2: i1
+    n2: n5
+    label: R4-GigabitEthernet0/1<->R1-GigabitEthernet0/1
+  - id: l4
+    i1: i2
+    n1: n2
+    i2: i0
+    n2: n1
+    label: R2-GigabitEthernet0/2<->R5-GigabitEthernet0/0
+  - id: l5
+    i1: i1
+    n1: n1
+    i2: i0
+    n2: n0
+    label: R5-GigabitEthernet0/1<->R8-GigabitEthernet0/0
+  - id: l6
+    i1: i2
+    n1: n6
+    i2: i0
+    n2: n7
+    label: R4-GigabitEthernet0/2<->R6-GigabitEthernet0/0
+  - id: l7
+    i1: i2
+    n1: n3
+    i2: i0
+    n2: n4
+    label: R3-GigabitEthernet0/2<->R7-GigabitEthernet0/0
+annotations:
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#D9822BFF'
+    rotation: 0
+    text_bold: true
+    text_content: |
+      OSPF ADMINISTRATION LAB - configure tasks 1-7 on the routers
+      Start state: addressing + basic OSPF/RIP work, all else default.
+      Loopback LANs (172.16.x.x, 192.168.x.x) are /24 stubs.
+      Areas: 0 = R1 R2 R3 R4 ring | 1 = R2(ABR) R5 R8 | 2 = R4(ABR) R6
+             RIPv2 = R3(ASBR) - R7. Verify every task before moving on.
+    text_font: monospace
+    text_italic: false
+    text_size: 12
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: -680.0
+    y1: -280.0
+    z_index: 0
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#1E6FBFFF'
+    rotation: 0
+    text_bold: false
+    text_content: |
+      1  HYGIENE
+       1.1 passive-interface default on every OSPF router; un-passive
+           only the routed OSPF links (R3-R7 is RIP, not OSPF)
+       1.2 All routed OSPF links = point-to-point (no DR/BDR), both ends
+       1.3 Area 2 totally stubby (ABR R4, internal router R6)
+
+      2  PATH MANIPULATION
+       2.1 Reference bandwidth 10000 (Mbps) on all OSPF routers
+       2.2 R2-R5 is a 100 Mbps circuit, R5-R8 a 10 Mbps circuit.
+           Use the `bandwidth` command (NOT ip ospf cost) so the
+           OSPF costs become 100 and 1000
+       2.3 R3-R4 is a backup link: cost 100 on both ends.
+           R1 <-> R3 traffic must use R2 only; the ring must still
+           fail over to R4 if R2-R3 goes down
+
+      3  SUMMARIZATION
+       3.1 R2: advertise 172.16.48.0/22 into area 0 instead of the
+           four /24s behind R5 (172.16.48.0 - 172.16.51.0)
+    text_font: monospace
+    text_italic: false
+    text_size: 11
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: -680.0
+    y1: 380.0
+    z_index: 0
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#1E6FBFFF'
+    rotation: 0
+    text_bold: false
+    text_content: |
+      4  REDISTRIBUTION FILTERING (R3: RIP -> OSPF)
+       4.1 Only 192.168.10.0/24 and 192.168.20.0/24 may enter OSPF.
+           192.168.30.0/24 and .40.0/24 stay in RIP only
+       4.2 192.168.10.0/24: Type 1 (E1), seed metric 50, tag 110
+           192.168.20.0/24: Type 2 (E2), seed metric 20, tag 120
+
+      5  ROUTE FILTERING (routing table only, LSDB untouched)
+       5.1 R1: do not install 192.168.20.0/24 (prefix-list). The Type 5
+           LSA must remain in R1's database
+       5.2 R5: do not install external routes carrying tag 110
+           (route-map). All other routers still install them
+
+      6  LSA FILTERING
+       6.1 R2: area 1 must not receive 172.16.60.0/24 (Type 3 LSA)
+       6.2 R4: do not advertise 172.16.63.0/24 from area 2 into area 0
+       6.3 R5: send NO LSAs to R8 (adjacency stays FULL). R8 reaches
+           the rest of the network with a static default via R5
+    text_font: monospace
+    text_italic: false
+    text_size: 11
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: -30.0
+    y1: 380.0
+    z_index: 0
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#1E6FBFFF'
+    rotation: 0
+    text_bold: false
+    text_content: |
+      7  AUTHENTICATION WITH KEY CHAINS (configure BOTH ends)
+       7.1 Area 0 links: R1-R2, R2-R3, R3-R4, R4-R1
+             key chain KC-BACKBONE, key 1, HMAC-SHA-256
+             key-string BackboneKey256
+       7.2 Area 1 links: R2-R5, R5-R8
+             key chain KC-AREA1, key 7, HMAC-SHA-256
+             key-string Area1Key256
+       7.3 Area 2 link: R4-R6
+             key chain KC-AREA2, key 3, HMAC-SHA-256
+             key-string Area2Key256
+       7.4 RIPv2 R3-R7: MD5 authentication using a key chain
+             key chain KC-RIP, key 1, key-string RipKey1
+             (R7 needs configuring too)
+
+      DONE WHEN: all neighbours FULL, R6 pings 172.16.10.1 from Lo10,
+      R8 pings 192.168.20.1 from Lo10, and each task verifies.
+    text_font: monospace
+    text_italic: false
+    text_size: 11
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: 620.0
+    y1: 380.0
+    z_index: 0
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#808080FF'
+    rotation: 0
+    text_bold: false
+    text_content: |
+      Links (/30)           Loopbacks
+      R1-R2  10.0.12.0      R1 1.1.1.1  Lo10 172.16.10.1/24
+      R2-R3  10.0.23.0      R2 2.2.2.2  R3 3.3.3.3  R4 4.4.4.4
+      R3-R4  10.0.34.0      R5 5.5.5.5  Lo10-13 172.16.48-51.1/24
+      R4-R1  10.0.14.0      R6 6.6.6.6  Lo10-13 172.16.60-63.1/24
+      R2-R5  10.1.25.0      R7 7.7.7.7  Lo10-13 192.168.10/20/30/40.1
+      R5-R8  10.1.58.0      R8 8.8.8.8  Lo10 172.16.80.1/24
+      R4-R6  10.2.46.0      Lower-numbered router = .1 on every /30
+      R3-R7  10.9.37.0      (R1-R2: R1 10.0.12.1, R2 10.0.12.2)
+    text_font: monospace
+    text_italic: false
+    text_size: 10
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: -680.0
+    y1: 120.0
+    z_index: 0
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#1E6FBFFF'
+    rotation: 0
+    text_bold: true
+    text_content: AREA 1
+    text_font: monospace
+    text_italic: false
+    text_size: 14
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: -520.0
+    y1: -100.0
+    z_index: 0
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#1E6FBFFF'
+    rotation: 0
+    text_bold: true
+    text_content: AREA 0
+    text_font: monospace
+    text_italic: false
+    text_size: 14
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: 120.0
+    y1: 100.0
+    z_index: 0
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#1E6FBFFF'
+    rotation: 0
+    text_bold: true
+    text_content: AREA 2
+    text_font: monospace
+    text_italic: false
+    text_size: 14
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: 560.0
+    y1: 320.0
+    z_index: 0
+  - border_color: '#00000000'
+    border_style: ''
+    color: '#1E6FBFFF'
+    rotation: 0
+    text_bold: true
+    text_content: RIPv2 / external
+    text_font: monospace
+    text_italic: false
+    text_size: 14
+    text_unit: pt
+    thickness: 1
+    type: text
+    x1: 560.0
+    y1: -100.0
+    z_index: 0
